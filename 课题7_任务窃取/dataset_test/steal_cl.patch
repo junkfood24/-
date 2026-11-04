@@ -1,6 +1,33 @@
+diff --git a/kvsched/cli.py b/kvsched/cli.py
+index f2dccdd..7141cfb 100644
+--- a/kvsched/cli.py
++++ b/kvsched/cli.py
+@@ -25,12 +25,19 @@ def algargs(p):
+     p.add_argument('--migration-cost',type=float,default=0.0,help='assumed extra time on worker change for same key')
+     p.add_argument('--aging',type=float,default=20.0,help='BG readiness waiting threshold, time units')
+     p.add_argument('--warmup',type=float,default=0.15)
++    p.add_argument('--steal-threshold',type=int,default=2,help='steal_cl: only steal when victim queue length > k')
++    p.add_argument('--steal-probe-limit',type=int,default=0,help='steal_cl: max victims probed (0 = workers-1)')
++    p.add_argument('--steal-owner',choices=('lifo','fifo'),default='lifo',
++                   help='steal_cl: owner end (lifo = Chase-Lev, fifo = ablation)')
+ 
+ def run_policies(tr,args):
+     rows=[]
+     for policy in args.policies:
+         row=simulate(tr,policy,base_dispatch=args.dispatch_cost,steal_probe=args.probe_cost,
+-                     migration_penalty=args.migration_cost,aging=args.aging,warmup=args.warmup)
++                     migration_penalty=args.migration_cost,aging=args.aging,warmup=args.warmup,
++                     steal_threshold=args.steal_threshold,
++                     steal_probe_limit=(args.steal_probe_limit or None),
++                     steal_owner=args.steal_owner)
+         rows.append(row)
+         print(f"{tr.case:14s} seed={tr.seed:2d} load={tr.load:.2f} {policy:8s}  "
+               f"fgP99={row['foreground_p99']:.3f}  Qmax={row['ready_queue_peak']}  "
+diff --git a/kvsched/sim.py b/kvsched/sim.py
+index bca7947..7bfd49d 100644
 --- a/kvsched/sim.py
 +++ b/kvsched/sim.py
-@@ -9,10 +9,11 @@
+@@ -9,10 +9,11 @@ from collections import defaultdict, deque
  from dataclasses import dataclass
  import heapq
  import math
@@ -13,7 +40,7 @@
  
  
  def home_for(key: int, n: int) -> int:
-@@ -99,13 +100,25 @@
+@@ -99,13 +100,25 @@ class KeyGate:
  class Engine:
      def __init__(self, trace:Trace, policy:str, base_dispatch:float=0.0,
                   steal_probe:float=0.0, migration_penalty:float=0.0,
@@ -32,7 +59,7 @@
          self.base_dispatch=base_dispatch; self.steal_probe=steal_probe
          self.migration_penalty=migration_penalty;self.aging=aging;self.check=check
 +        self.steal_threshold=steal_threshold
-+        self.steal_probe_limit=steal_probe_limit or 2*self.c
++        self.steal_probe_limit=steal_probe_limit or max(1,self.c-1)
 +        self.steal_owner=steal_owner
 +        # Deterministic victim order for the Chase-Lev policy: same trace seed
 +        # gives the same probe sequence, so paired comparisons stay valid.
@@ -40,7 +67,15 @@
          self.measure_cut=int(len(trace.requests)*warmup)
          self.tasks=[Runtime(r,measure=(r.id>=self.measure_cut)) for r in trace.requests]
          self.gate=KeyGate()
-@@ -163,8 +176,26 @@
+@@ -117,6 +130,7 @@ class Engine:
+         self.run_key_write=set()
+         self.run_key_last_worker={}
+         self.busy_work=[0.0]*self.c
++        self.idle_probe_debt=[0.0]*self.c
+         self.finished=[]
+         self.fin_events=[]
+         self.seq=0
+@@ -163,8 +177,29 @@ class Engine:
              if self.fg_queue: return self.fg_queue.popleft(),0
              if self.bg_queue: return self.bg_queue.popleft(),0
              return None,0
@@ -64,11 +99,25 @@
 +                    return self.local[j].popleft(),probes
 +                if probes>=self.steal_probe_limit:
 +                    break
-+            return None,0
++            # Charge failed probes too: a thief that scans and finds nothing
++            # still burns CPU.  Returning the count lets _dispatch account it.
++            self.steal_attempts+=probes
++            return None,probes
          # Work stealing: pick longest nonempty victim; O(c) observation.
          victim=-1;best=0
          for j in range(self.c):
-@@ -203,11 +234,14 @@
+@@ -191,8 +226,9 @@ class Engine:
+         migration=(last is not None and last != worker)
+         self.migrations+=int(migration)
+         # All costs are MODEL ASSUMPTIONS, never real hardware observations.
+-        spent=(t.spec.service+self.base_dispatch+probes*self.steal_probe+
++        spent=(t.spec.service+self.base_dispatch+self.idle_probe_debt[worker]+probes*self.steal_probe+
+                (self.migration_penalty if migration else 0.0))
++        self.idle_probe_debt[worker]=0.0
+         if spent<0:raise AssertionError('negative service')
+         self.busy_work[worker]+=spent
+         self.dispatches+=1
+@@ -203,15 +239,19 @@ class Engine:
          # Critical fairness detail: an idle task's HOME worker gets first
          # opportunity before any thief. Otherwise scanning workers in index
          # order would allow core 0 to steal from an *idle* core 7.
@@ -86,26 +135,18 @@
                  for w in range(self.c):
                      if not self.busy[w]:
                          task,probes=self._pick(w)
---- a/kvsched/cli.py
-+++ b/kvsched/cli.py
-@@ -25,12 +25,19 @@
-     p.add_argument('--migration-cost',type=float,default=0.0,help='assumed extra time on worker change for same key')
-     p.add_argument('--aging',type=float,default=20.0,help='BG readiness waiting threshold, time units')
-     p.add_argument('--warmup',type=float,default=0.15)
-+    p.add_argument('--steal-threshold',type=int,default=2,help='steal_cl: only steal when victim queue length > k')
-+    p.add_argument('--steal-probe-limit',type=int,default=0,help='steal_cl: max victims probed (0 = 2*workers)')
-+    p.add_argument('--steal-owner',choices=('lifo','fifo'),default='lifo',
-+                   help='steal_cl: owner end (lifo = Chase-Lev, fifo = ablation)')
- 
- def run_policies(tr,args):
-     rows=[]
-     for policy in args.policies:
-         row=simulate(tr,policy,base_dispatch=args.dispatch_cost,steal_probe=args.probe_cost,
--                     migration_penalty=args.migration_cost,aging=args.aging,warmup=args.warmup)
-+                     migration_penalty=args.migration_cost,aging=args.aging,warmup=args.warmup,
-+                     steal_threshold=args.steal_threshold,
-+                     steal_probe_limit=(args.steal_probe_limit or None),
-+                     steal_owner=args.steal_owner)
-         rows.append(row)
-         print(f"{tr.case:14s} seed={tr.seed:2d} load={tr.load:.2f} {policy:8s}  "
-               f"fgP99={row['foreground_p99']:.3f}  Qmax={row['ready_queue_peak']}  "
+                         if task is not None:self._start(task,w,probes)
++                        elif probes:self.idle_probe_debt[w]+=probes*self.steal_probe
+         else:
+             for w in range(self.c):
+                 if not self.busy[w]:
+@@ -262,6 +302,9 @@ class Engine:
+             else:
+                 self.t=next_arr
+                 req=inputs[i];i+=1
++                if i-1==self.measure_cut:
++                    # Counters are reported for the measured window only.
++                    self.steals=0;self.steal_attempts=0;self.migrations=0
+                 for item in self.gate.admit(self.tasks[req.id],self.t): self._route(item)
+                 if req.kind=='UPDATE' and self.tr.bg_mode=='on_arrival':
+                     self._background(self.tasks[req.id])

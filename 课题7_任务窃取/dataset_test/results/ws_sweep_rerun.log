@@ -1,0 +1,16 @@
+T1_A seed 0 done
+T1_A seed 1 done
+T1_A seed 2 done
+T2_ZIPF099 seed 0 done
+T2_ZIPF099 seed 1 done
+T2_ZIPF099 seed 2 done
+T3_DYNAMIC seed 0 done
+T3_DYNAMIC seed 1 done
+T3_DYNAMIC seed 2 done
+T4_K100 seed 0 done
+T4_K100 seed 1 done
+T4_K100 seed 2 done
+T5_BG10 seed 0 done
+T5_BG10 seed 1 done
+T5_BG10 seed 2 done
+wrote D:\�ҵ��ĵ�\deepseek-harness\default-workspace\������\����7_������ȡ\dataset_test\results\ws_sweep.csv D:\�ҵ��ĵ�\deepseek-harness\default-workspace\������\����7_������ȡ\dataset_test\results\ws_sweep_summary.csv rows 210 groups 70

@@ -4,7 +4,12 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+BENCH = os.environ.get("KV_BENCH") or os.path.abspath(
+    os.path.join(HERE, "..", "..", "benchmark_student", "KV_Scheduling_Benchmark_WS")
+)
+if not os.path.isdir(os.path.join(BENCH, "kvsched")):
+    raise SystemExit(f"benchmark package not found: {BENCH}; set KV_BENCH")
+sys.path.insert(0, BENCH)
 
 from kvsched.sim import simulate
 from kvsched.workload import generate

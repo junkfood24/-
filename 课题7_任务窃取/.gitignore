@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*.pyo
+code/bench_ws.exe
+code/bench_ws
+_backup_pre_fix/
+results_fixed/
+.DS_Store

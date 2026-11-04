@@ -2,7 +2,7 @@
 //
 // 构造：2,000,000 个任务，键按 uniform 或 Zipf(1.1) 映射到 80 个分片，
 //       分片 s 的属主为 s % 20；每个任务做 512 次（1% 长任务 16384 次）
-//       相关哈希探测，约 1–2 µs。三种策略处理同一批任务，比较 makespan、
+//       相关哈希探测，约 4–7 µs（随机器与编译器变化）。三种策略处理同一批任务，比较 makespan、
 //       吞吐与端到端延迟分位数（提交时刻统一取 barrier 之后的 t0）。
 //
 // 编译： g++ -O2 -std=c++17 -pthread bench_ws.cpp -o bench_ws
@@ -282,13 +282,26 @@ void selftest() {
     ChaseLevDeque<int> q(4);
     constexpr int kItems = 200000;
     std::atomic<int> consumed{0};
+    std::atomic<int> duplicates{0};
+    std::vector<std::atomic<int>> seen(kItems);
+    for (auto& s : seen) s.store(0, std::memory_order_relaxed);
+    auto consume = [&](int v) {
+        if (v < 0 || v >= kItems) {
+            std::printf("SELFTEST FAILED: out-of-range item %d\n", v);
+            std::exit(1);
+        }
+        if (seen[v].fetch_add(1, std::memory_order_relaxed) != 0)
+            duplicates.fetch_add(1, std::memory_order_relaxed);
+        consumed.fetch_add(1, std::memory_order_relaxed);
+    };
+
     std::vector<std::thread> thieves;
     std::atomic<bool> stop{false};
     for (int i = 0; i < 4; ++i) {
         thieves.emplace_back([&] {
             int v;
             while (!stop.load(std::memory_order_relaxed)) {
-                if (q.steal(v)) consumed.fetch_add(1, std::memory_order_relaxed);
+                if (q.steal(v)) consume(v);
             }
         });
     }
@@ -296,22 +309,27 @@ void selftest() {
         q.push(i);
         if (i % 1000 == 0) {
             int v;
-            if (q.pop(v)) consumed.fetch_add(1, std::memory_order_relaxed);
+            if (q.pop(v)) consume(v);
         }
     }
     while (consumed.load(std::memory_order_relaxed) < kItems) {
         int v;
-        if (q.pop(v)) consumed.fetch_add(1, std::memory_order_relaxed);
+        if (q.pop(v)) consume(v);
         else std::this_thread::yield();
     }
     stop.store(true, std::memory_order_relaxed);
     for (auto& t : thieves) t.join();
-    if (consumed.load() != kItems) {
-        std::printf("SELFTEST FAILED: consumed=%d expected=%d\n",
-                    consumed.load(), kItems);
+
+    int missing = 0;
+    for (int i = 0; i < kItems; ++i)
+        if (seen[i].load(std::memory_order_relaxed) == 0) ++missing;
+    if (missing != 0 || duplicates.load() != 0 ||
+        consumed.load() != kItems) {
+        std::printf("SELFTEST FAILED: consumed=%d expected=%d missing=%d duplicates=%d\n",
+                    consumed.load(), kItems, missing, duplicates.load());
         std::exit(1);
     }
-    std::printf("SELFTEST OK: %d items consumed exactly once\n", kItems);
+    std::printf("SELFTEST OK: %d items, missing=0 duplicates=0\n", kItems);
 }
 
 }  // namespace
@@ -321,16 +339,20 @@ int main(int argc, char** argv) {
     int threads = static_cast<int>(std::thread::hardware_concurrency());
     if (threads <= 0) threads = 8;
     std::string workload = "skew";
+    bool run_selftest = false;
+    int positional = 0;
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--selftest") == 0) { selftest(); return 0; }
+        if (std::strcmp(argv[i], "--selftest") == 0) run_selftest = true;
         else if (std::strcmp(argv[i], "--uniform") == 0) workload = "uniform";
         else if (std::strcmp(argv[i], "--skew") == 0) workload = "skew";
         else if (argv[i][0] != '-') {
-            if (i == 1) n = std::strtoull(argv[i], nullptr, 10);
-            else if (i == 2) threads = std::atoi(argv[i]);
-            else if (i == 3) workload = argv[i];
+            if (positional == 0) n = std::strtoull(argv[i], nullptr, 10);
+            else if (positional == 1) threads = std::atoi(argv[i]);
+            else if (positional == 2) workload = argv[i];
+            ++positional;
         }
     }
+    if (run_selftest) { selftest(); return 0; }
     constexpr int kMaxThreads = 64;
     if (threads <= 0 || threads > kMaxThreads) threads = 20;
     std::printf("tasks=%zu threads=%d workload=%s\n", n, threads, workload.c_str());

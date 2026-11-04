@@ -116,8 +116,10 @@ class Metrics:
         self.bin_width = bin_width
         self.lat = []
         self.comp = []
+        self.arrivals = 0
         self.completed = 0
         self.dropped = 0
+        self.window_completed = 0
         self.steals = 0
         self.remote = 0
         self.bins = {}
@@ -125,6 +127,8 @@ class Metrics:
     def add(self, arr, comp, worker=None, owner=None):
         self.lat.append(comp - arr)
         self.comp.append(comp)
+        if comp <= self.horizon:
+            self.window_completed += 1
         if self.bin_width > 0:
             b = int(comp / self.bin_width)
             self.bins[b] = self.bins.get(b, 0) + 1
@@ -139,11 +143,22 @@ class Metrics:
         pct = np.percentile(lat, np.array(qs) * 100.0) if lat.size else np.zeros(4)
         bins = [[k * self.bin_width / 1000.0, self.bins[k]]
                 for k in sorted(self.bins)] if self.bins else []
+        accepted = self.arrivals - self.dropped
+        # 吞吐按固定窗口 [0, HORIZON] 内完成数计，避免把排空段计入 makespan。
+        window_mops = (self.window_completed / (self.horizon / 1e6) / 1e6) if self.horizon > 0 else 0.0
+        drain_mops = (self.completed / (makespan_us / 1e6) / 1e6) if makespan_us > 0 else 0.0
         return {
+            "arrivals": int(self.arrivals),
+            "accepted": int(accepted),
             "completed": int(self.completed),
+            "window_completed": int(self.window_completed),
             "dropped": int(self.dropped),
+            "backlog_at_horizon": int(max(0, accepted - self.window_completed)),
             "makespan_us": makespan_us,
-            "throughput_mops": (self.completed / (makespan_us / 1e6) / 1e6) if makespan_us > 0 else 0.0,
+            "throughput_mops": window_mops,
+            "drain_mops": drain_mops,
+            "drop_rate": (100.0 * self.dropped / max(1, self.arrivals)),
+            "window_completion_pct": (100.0 * self.window_completed / max(1, self.arrivals)),
             "mean_us": float(lat.mean()) if lat.size else 0.0,
             "p50_us": float(pct[0]), "p90_us": float(pct[1]),
             "p99_us": float(pct[2]), "p999_us": float(pct[3]),
@@ -166,6 +181,9 @@ def make_idle_helpers():
     ilist = list(range(P))
 
     def take():
+        if len(ilist) > 4 * P:
+            # 直接派发时 idle.remove 会留下 stale 条目；周期性压缩，保证内存有界。
+            ilist[:] = list(idle)
         while ilist:
             w = ilist.pop()
             if w in idle:
@@ -181,8 +199,9 @@ def make_idle_helpers():
     return idle, take, put
 
 
-def simulate_fifo(times, shards, services, rng):
-    m = Metrics(HORIZON)
+def simulate_fifo(times, shards, services, rng, horizon=HORIZON):
+    m = Metrics(horizon)
+    m.arrivals = len(times)
     q = deque()
     heap = []
     idle, take, put = make_idle_helpers()
@@ -231,8 +250,9 @@ def simulate_fifo(times, shards, services, rng):
     return m
 
 
-def simulate_local(times, shards, services):
-    m = Metrics(HORIZON)
+def simulate_local(times, shards, services, horizon=HORIZON):
+    m = Metrics(horizon)
+    m.arrivals = len(times)
     pending = [deque() for _ in range(P)]     # 每个队列存完成时间
     for i in range(len(times)):
         t = float(times[i])
@@ -252,8 +272,9 @@ def simulate_local(times, shards, services):
 
 
 def simulate_ws(times, shards, services, rng, thresh=THRESH,
-                remote_pen=0.0, affinity=False):
-    m = Metrics(HORIZON)
+                remote_pen=0.0, affinity=False, horizon=HORIZON):
+    m = Metrics(horizon)
+    m.arrivals = len(times)
     deques = [deque() for _ in range(P)]
     heap = []
     idle, take, put = make_idle_helpers()
@@ -263,7 +284,9 @@ def simulate_ws(times, shards, services, rng, thresh=THRESH,
         if affinity:
             peers = [w for w in node_peers[int(NODE_OF[owner])] if w in idle]
             if peers:
-                return peers[rng.randrange(len(peers))]
+                th = peers[rng.randrange(len(peers))]
+                idle.remove(th)          # 与 take() 一致，避免同一 worker 被重复派发
+                return th
         w = take()
         return w
 
@@ -284,14 +307,12 @@ def simulate_ws(times, shards, services, rng, thresh=THRESH,
         return -1
 
     def execute(w, sv, sh, arr, now, stolen):
-        nonlocal_steals = 0
         if stolen and remote_pen > 0.0 and NODE_OF[w] != NODE_OF[OWNER[sh]]:
             sv = sv * (1.0 + remote_pen)
         c = now + sv + (STEAL_COST if stolen else 0.0) + LOCAL_OVERHEAD
         m.add(arr, c, w, int(OWNER[sh]))
         m.completed += 1
         heapq.heappush(heap, (c, w))
-        return nonlocal_steals
 
     n = len(times)
     for i in range(n):
@@ -320,7 +341,7 @@ def simulate_ws(times, shards, services, rng, thresh=THRESH,
             m.dropped += 1
             continue
         deques[ow].append((sv, sh, t))
-        if idle and len(deques[ow]) >= thresh:
+        if idle and len(deques[ow]) > thresh:
             th = pick_thief(ow)
             if th >= 0:
                 sv2, sh2, arr2 = deques[ow].popleft()
@@ -341,29 +362,14 @@ def simulate_ws(times, shards, services, rng, thresh=THRESH,
         else:
             put(w)
 
-    # 兜底：若仍有残留（探测失败而进入空闲），唤醒空闲线程继续偷
+    # 事件循环结束后不应再有残留；若有，说明空闲唤醒/终止条件有 bug，直接报错而不是静默吞掉。
     leftover = sum(len(d) for d in deques)
-    guard = 0
-    while leftover and guard < 10 * P:
-        guard += 1
-        w = take()
-        if w < 0:
-            break
-        v = max(range(P), key=lambda x: len(deques[x]))
-        if len(deques[v]) == 0:
-            put(w)
-            break
-        sv, sh, arr = deques[v].popleft()
-        m.steals += 1
-        execute(w, sv, sh, arr, float(times[-1]) if n else 0.0, True)
-        while heap:
-            ft, ww = heapq.heappop(heap)
-            if deques[ww]:
-                sv, sh, arr = deques[ww].pop()
-                execute(ww, sv, sh, arr, ft, False)
-            else:
-                put(ww)
-        leftover = sum(len(d) for d in deques)
+    if leftover:
+        raise RuntimeError(f"event loop ended with {leftover} queued tasks")
+    if m.completed + m.dropped != m.arrivals:
+        raise RuntimeError(
+            f"task accounting mismatch: completed={m.completed}, dropped={m.dropped}, "
+            f"arrivals={m.arrivals}")
     return m
 
 
@@ -373,7 +379,7 @@ def simulate_ws(times, shards, services, rng, thresh=THRESH,
 def run_main(out_path, seed=20261104, horizon=HORIZON):
     cap = P / (MEAN_SVC + LONG_FRAC * LONG_MEAN) * 1e6     # 每秒任务数
     lam = UTIL * cap / 1e6                                  # 每微秒任务数
-    print(f"[main] capacity≈{cap/1e6:.2f} Mtask/s, offered≈{lam*1e6:.2f} Mtask/s")
+    print(f"[main] capacity≈{cap/1e6:.2f} Mtask/s, offered≈{lam:.2f} Mtask/s")
     rows = []
     curves = {}
     for kind in ("uniform", "skew", "dynamic"):
@@ -383,17 +389,18 @@ def run_main(out_path, seed=20261104, horizon=HORIZON):
         for policy in ("fifo", "local", "ws"):
             r = random.Random(seed)
             if policy == "fifo":
-                m = simulate_fifo(times, shards, services, r)
+                m = simulate_fifo(times, shards, services, r, horizon=horizon)
             elif policy == "local":
-                m = simulate_local(times, shards, services)
+                m = simulate_local(times, shards, services, horizon=horizon)
             else:
-                m = simulate_ws(times, shards, services, r)
+                m = simulate_ws(times, shards, services, r, horizon=horizon)
             s = m.summary()
             s.update(policy=policy, workload=kind, seed=seed)
             rows.append(s)
             curves[f"{kind}|{policy}"] = m.cdf()
             print(f"  {policy:6s} tput={s['throughput_mops']:.3f} M/s "
-                  f"drop={100.0*s['dropped']/max(1,s['completed']+s['dropped']):5.1f}% "
+                  f"drain={s['drain_mops']:.3f} M/s "
+                  f"drop={s['drop_rate']:5.1f}% backlog={s['backlog_at_horizon']:6d} "
                   f"P99={s['p99_us']:8.1f}us P99.9={s['p999_us']:9.1f}us")
     out = {"config": {"P": P, "shards": SHARDS, "capacity_cap": cap, "lambda": lam,
                       "horizon": horizon, "thresh": THRESH, "seed": seed,
@@ -451,9 +458,9 @@ def run_quick():
     print("tasks:", len(times))
     for pol in ("fifo", "local", "ws"):
         r = random.Random(1)
-        m = {"fifo": lambda: simulate_fifo(times, shards, services, r),
-             "local": lambda: simulate_local(times, shards, services),
-             "ws": lambda: simulate_ws(times, shards, services, r)}[pol]()
+        m = {"fifo": lambda: simulate_fifo(times, shards, services, r, horizon=50000.0),
+             "local": lambda: simulate_local(times, shards, services, horizon=50000.0),
+             "ws": lambda: simulate_ws(times, shards, services, r, horizon=50000.0)}[pol]()
         print(pol, json.dumps(m.summary(), ensure_ascii=False, indent=1))
 
 

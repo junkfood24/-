@@ -65,9 +65,9 @@ def fig_overview(main):
             ax.text(rect.get_x() + rect.get_width() / 2, v + 0.012,
                     f"{v:.2f}", ha="center", va="bottom", fontsize=8.2)
     ax.set_xticks(x, [WORK[k] for k in kinds])
-    ax.set_ylabel("吞吐率（Mtask/s）")
+    ax.set_ylabel("窗口完成率（Mtask/s）")
     ax.set_ylim(0, 0.83)
-    ax.set_title("(a) 吞吐率：偏斜负载下本地队列塌陷")
+    ax.set_title("(a) 窗口完成率：偏斜负载下本地队列塌陷")
     ax.legend(loc="upper right", ncol=1, fontsize=9)
 
     ax = axes[1]
@@ -120,7 +120,7 @@ def fig_dynamic(main):
                 label=LABELS[p], linewidth=1.8)
     ax.set_xlabel("时间（ms）")
     ax.set_ylabel("每 10 ms 完成任务数")
-    ax.set_title("动态热点（热点分片每 25 ms 轮换）下的吞吐时序")
+    ax.set_title("动态热点（每 25 ms 轮换）下的完成数时序")
     ax.legend(loc="lower right")
     ax.set_xlim(0, 700)
     fig.tight_layout()

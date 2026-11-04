@@ -1,0 +1,42 @@
+=== uniform round 1 ===
+tasks=2000000 threads=20 workload=uniform
+policy      makespan_ms      Mop/s     P50_us     P99_us   P99.9_us     checksum
+fifo              772.4      2.589   379915.3   764356.7   771380.7 16829878682654211843
+local             598.6      3.341   238117.8   560994.7   592267.8 16829878682654211843
+ws                516.5      3.872   262560.6   510580.6   515819.6 16829878682654211843
+checksum OK
+=== uniform round 2 ===
+tasks=2000000 threads=20 workload=uniform
+policy      makespan_ms      Mop/s     P50_us     P99_us   P99.9_us     checksum
+fifo              763.0      2.621   361940.2   755463.0   762057.6 16829878682654211843
+local             494.7      4.043   223301.8   473340.2   488726.3 16829878682654211843
+ws                456.2      4.384   208741.6   451337.8   455634.1 16829878682654211843
+checksum OK
+=== uniform round 3 ===
+tasks=2000000 threads=20 workload=uniform
+policy      makespan_ms      Mop/s     P50_us     P99_us   P99.9_us     checksum
+fifo              772.0      2.591   406791.9   764929.7   770904.0 16829878682654211843
+local             495.0      4.040   220346.8   476989.7   490852.8 16829878682654211843
+ws                522.8      3.825   262475.6   517203.4   522198.1 16829878682654211843
+checksum OK
+=== skew round 1 ===
+tasks=2000000 threads=20 workload=skew
+policy      makespan_ms      Mop/s     P50_us     P99_us   P99.9_us     checksum
+fifo              571.7      3.498   293958.1   566150.5   570936.4 1874899726873588722
+local            1302.7      1.535   239187.4  1256982.2  1298090.5 1874899726873588722
+ws                511.4      3.910   249059.0   505811.7   510964.2 1874899726873588722
+checksum OK
+=== skew round 2 ===
+tasks=2000000 threads=20 workload=skew
+policy      makespan_ms      Mop/s     P50_us     P99_us   P99.9_us     checksum
+fifo              587.2      3.406   280788.0   581499.8   586488.5 1874899726873588722
+local            1326.2      1.508   237349.3  1277092.6  1321440.0 1874899726873588722
+ws                518.6      3.857   244907.3   511521.9   517880.2 1874899726873588722
+checksum OK
+=== skew round 3 ===
+tasks=2000000 threads=20 workload=skew
+policy      makespan_ms      Mop/s     P50_us     P99_us   P99.9_us     checksum
+fifo              561.9      3.559   277570.5   556508.2   561302.5 1874899726873588722
+local            1333.5      1.500   240693.9  1287161.1  1328630.2 1874899726873588722
+ws                470.7      4.249   214997.2   464665.1   470091.0 1874899726873588722
+checksum OK
