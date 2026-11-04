@@ -1,0 +1,30 @@
+Replayed 1000 requests checksum e2e25131bc4cbf6aaa4d9f1aac9a235988abef4a447e525358102ba93e2e74ad
+T1_B           seed=11 load=0.70 fifo      fgP99=1.646  Qmax=7  steals=0  bg=0
+T1_B           seed=11 load=0.70 local     fgP99=6.531  Qmax=18  steals=0  bg=0
+T1_B           seed=11 load=0.70 steal     fgP99=1.844  Qmax=8  steals=646  bg=0
+Output: results\ex_T1_B_1k.csv
+Replayed 1500 requests checksum 5c3cf5026284f9199e57530b2be60f657b3aafe1787051a870fa569ae258a295
+T2_ZIPF099     seed=11 load=0.70 fifo      fgP99=1.906  Qmax=8  steals=0  bg=0
+T2_ZIPF099     seed=11 load=0.70 local     fgP99=59.167  Qmax=38  steals=0  bg=0
+T2_ZIPF099     seed=11 load=0.70 steal     fgP99=2.149  Qmax=8  steals=951  bg=0
+Output: results\ex_T2_ZIPF099_1p5k.csv
+Replayed 1500 requests checksum 725435e923d61dd43c0fefbef12638bc41afb3a8db4d4ed88a2a9ce6d1bdf8b5
+T3_DYNAMIC     seed=11 load=0.70 fifo      fgP99=1.906  Qmax=8  steals=0  bg=0
+T3_DYNAMIC     seed=11 load=0.70 local     fgP99=42.929  Qmax=37  steals=0  bg=0
+T3_DYNAMIC     seed=11 load=0.70 steal     fgP99=2.038  Qmax=8  steals=924  bg=0
+Output: results\ex_T3_DYNAMIC_1p5k.csv
+Replayed 1500 requests checksum 7f2ba151488859ace2fdfb2421bfe4735affa5b9bf09b5d46cfa862385ec9da4
+T3_SHUFFLED    seed=11 load=0.70 fifo      fgP99=1.835  Qmax=8  steals=0  bg=0
+T3_SHUFFLED    seed=11 load=0.70 local     fgP99=13.050  Qmax=20  steals=0  bg=0
+T3_SHUFFLED    seed=11 load=0.70 steal     fgP99=2.104  Qmax=8  steals=900  bg=0
+Output: results\ex_T3_SHUFFLED_1p5k.csv
+Replayed 2000 requests checksum d8fabc4a07f87735e9a69e7ec886b3417e791ee3a0b2a517b0b27f72d5439fc3
+T4_K100        seed=11 load=0.70 fifo      fgP99=1.582  Qmax=10  steals=0  bg=0
+T4_K100        seed=11 load=0.70 local     fgP99=94.693  Qmax=81  steals=0  bg=0
+T4_K100        seed=11 load=0.70 steal     fgP99=1.774  Qmax=10  steals=1206  bg=0
+Output: results\ex_T4_K100_2k.csv
+Replayed 1500 requests checksum 21acea3297cb0469a43945fd6a717f60d0cf87c432d9e0790a0696d52d9cbc28
+T5_BG10_FIXED  seed=11 load=0.70 fifo      fgP99=2.705  Qmax=12  steals=0  bg=21
+T5_BG10_FIXED  seed=11 load=0.70 local     fgP99=18.304  Qmax=41  steals=0  bg=21
+T5_BG10_FIXED  seed=11 load=0.70 steal     fgP99=3.251  Qmax=11  steals=923  bg=21
+Output: results\ex_T5_BG10_FIXED_1p5k.csv

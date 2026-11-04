@@ -1,0 +1,111 @@
+--- a/kvsched/sim.py
++++ b/kvsched/sim.py
+@@ -9,10 +9,11 @@
+ from dataclasses import dataclass
+ import heapq
+ import math
++import random
+ from typing import Callable
+ from .workload import Trace, Request
+ 
+-POLICIES=("fifo","priority","local","steal")
++POLICIES=("fifo","priority","local","steal","steal_cl")
+ 
+ 
+ def home_for(key: int, n: int) -> int:
+@@ -99,13 +100,25 @@
+ class Engine:
+     def __init__(self, trace:Trace, policy:str, base_dispatch:float=0.0,
+                  steal_probe:float=0.0, migration_penalty:float=0.0,
+-                 aging:float=20.0, warmup:float=0.15, check:bool=True):
++                 aging:float=20.0, warmup:float=0.15, check:bool=True,
++                 steal_threshold:int=2, steal_probe_limit:int|None=None,
++                 steal_owner:str='lifo'):
+         if policy not in POLICIES: raise ValueError('invalid policy')
+         if not (0<=warmup<1) or min(base_dispatch,steal_probe,migration_penalty,aging)<0:
+             raise ValueError('costs/aging must be nonnegative and warmup in [0,1)')
++        if steal_threshold<0 or (steal_probe_limit is not None and steal_probe_limit<1):
++            raise ValueError('bad steal threshold/probe limit')
++        if steal_owner not in ('lifo','fifo'):
++            raise ValueError('steal_owner must be lifo or fifo')
+         self.tr=trace;self.policy=policy;self.c=trace.workers
+         self.base_dispatch=base_dispatch; self.steal_probe=steal_probe
+         self.migration_penalty=migration_penalty;self.aging=aging;self.check=check
++        self.steal_threshold=steal_threshold
++        self.steal_probe_limit=steal_probe_limit or 2*self.c
++        self.steal_owner=steal_owner
++        # Deterministic victim order for the Chase-Lev policy: same trace seed
++        # gives the same probe sequence, so paired comparisons stay valid.
++        self.rng=random.Random((trace.seed+1)*1000003 + self.c)
+         self.measure_cut=int(len(trace.requests)*warmup)
+         self.tasks=[Runtime(r,measure=(r.id>=self.measure_cut)) for r in trace.requests]
+         self.gate=KeyGate()
+@@ -163,8 +176,26 @@
+             if self.fg_queue: return self.fg_queue.popleft(),0
+             if self.bg_queue: return self.bg_queue.popleft(),0
+             return None,0
+-        if self.local[worker]:return self.local[worker].popleft(),0
++        if self.local[worker]:
++            if self.policy=='steal_cl' and self.steal_owner=='lifo':
++                return self.local[worker].pop(),0      # owner LIFO (Chase-Lev)
++            return self.local[worker].popleft(),0
+         if self.policy=='local':return None,0
++        if self.policy=='steal_cl':
++            # Chase-Lev style: random victims, only steal when the victim has
++            # more than k queued tasks, thief takes the oldest (top, FIFO).
++            order=list(range(self.c));self.rng.shuffle(order)
++            probes=0
++            for j in order:
++                if j==worker:continue
++                probes+=1
++                if len(self.local[j])>self.steal_threshold:
++                    self.steal_attempts+=probes
++                    self.steals+=1
++                    return self.local[j].popleft(),probes
++                if probes>=self.steal_probe_limit:
++                    break
++            return None,0
+         # Work stealing: pick longest nonempty victim; O(c) observation.
+         victim=-1;best=0
+         for j in range(self.c):
+@@ -203,11 +234,14 @@
+         # Critical fairness detail: an idle task's HOME worker gets first
+         # opportunity before any thief. Otherwise scanning workers in index
+         # order would allow core 0 to steal from an *idle* core 7.
+-        if self.policy in ('local','steal'):
++        if self.policy in ('local','steal','steal_cl'):
+             for w in range(self.c):
+                 if not self.busy[w] and self.local[w]:
+-                    self._start(self.local[w].popleft(),w,0)
+-            if self.policy=='steal':
++                    if self.policy=='steal_cl' and self.steal_owner=='lifo':
++                        self._start(self.local[w].pop(),w,0)
++                    else:
++                        self._start(self.local[w].popleft(),w,0)
++            if self.policy in ('steal','steal_cl'):
+                 for w in range(self.c):
+                     if not self.busy[w]:
+                         task,probes=self._pick(w)
+--- a/kvsched/cli.py
++++ b/kvsched/cli.py
+@@ -25,12 +25,19 @@
+     p.add_argument('--migration-cost',type=float,default=0.0,help='assumed extra time on worker change for same key')
+     p.add_argument('--aging',type=float,default=20.0,help='BG readiness waiting threshold, time units')
+     p.add_argument('--warmup',type=float,default=0.15)
++    p.add_argument('--steal-threshold',type=int,default=2,help='steal_cl: only steal when victim queue length > k')
++    p.add_argument('--steal-probe-limit',type=int,default=0,help='steal_cl: max victims probed (0 = 2*workers)')
++    p.add_argument('--steal-owner',choices=('lifo','fifo'),default='lifo',
++                   help='steal_cl: owner end (lifo = Chase-Lev, fifo = ablation)')
+ 
+ def run_policies(tr,args):
+     rows=[]
+     for policy in args.policies:
+         row=simulate(tr,policy,base_dispatch=args.dispatch_cost,steal_probe=args.probe_cost,
+-                     migration_penalty=args.migration_cost,aging=args.aging,warmup=args.warmup)
++                     migration_penalty=args.migration_cost,aging=args.aging,warmup=args.warmup,
++                     steal_threshold=args.steal_threshold,
++                     steal_probe_limit=(args.steal_probe_limit or None),
++                     steal_owner=args.steal_owner)
+         rows.append(row)
+         print(f"{tr.case:14s} seed={tr.seed:2d} load={tr.load:.2f} {policy:8s}  "
+               f"fgP99={row['foreground_p99']:.3f}  Qmax={row['ready_queue_peak']}  "
